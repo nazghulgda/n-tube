@@ -23,14 +23,14 @@ iconutil -c icns "$ICONSET" -o build/n-tube.icns
     --windowed \
     --clean \
     --noconfirm \
-    --name yt-downloader \
+    --name n-tube \
     --icon build/n-tube.icns \
     --add-data "assets:assets" \
     --collect-binaries imageio_ffmpeg \
-    pull-yt-video-gui.py
+    n-tube-gui.py
 
 # ditto keeps symlinks and permissions in .app
-ditto -c -k --keepParent dist/yt-downloader.app dist/yt-downloader-macos.zip
+ditto -c -k --keepParent dist/n-tube.app dist/n-tube-macos.zip
 
 echo
-echo "Done: dist/yt-downloader.app (zipped: dist/yt-downloader-macos.zip)"
+echo "Done: dist/n-tube.app (zipped: dist/n-tube-macos.zip)"

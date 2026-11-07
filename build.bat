@@ -14,11 +14,11 @@ rem --collect-binaries imageio_ffmpeg - ffmpeg inside the exe
     --windowed ^
     --clean ^
     --noconfirm ^
-    --name yt-downloader ^
+    --name n-tube ^
     --icon assets\n-tube.ico ^
     --add-data "assets;assets" ^
     --collect-binaries imageio_ffmpeg ^
-    pull-yt-video-gui.py
+    n-tube-gui.py
 if errorlevel 1 (
     echo ERROR: Build failed.
     pause
@@ -26,5 +26,5 @@ if errorlevel 1 (
 )
 
 echo.
-echo Done: dist\yt-downloader.exe
+echo Done: dist\n-tube.exe
 pause

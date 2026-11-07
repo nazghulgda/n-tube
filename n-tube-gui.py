@@ -24,7 +24,7 @@ def set_icon(root):
         # without it taskbar shows python icon
         try:
             import ctypes
-            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID('yt-downloader')
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID('n-tube')
         except Exception:
             pass
         root.iconbitmap(default=str(ASSETS / 'n-tube.ico'))
@@ -95,6 +95,9 @@ class App:
             self.folder_var.set(folder)
 
     def start_download(self):
+        # Enter works also when button is disabled
+        if self.download_btn.instate(['disabled']):
+            return
         url = self.url_var.get().strip()
         if not url:
             messagebox.showwarning('No URL', 'Paste the URL of the video you want to download.')
@@ -116,6 +119,7 @@ class App:
             'noprogress': True,
             'logger': GuiLogger(self.events),
             'progress_hooks': [self.progress_hook],
+            'postprocessor_hooks': [self.postprocessor_hook],
             # final file path, after merging
             'post_hooks': [saved_files.append],
             # 'cookiesfrombrowser': ('firefox',),
@@ -136,6 +140,10 @@ class App:
         elif d['status'] == 'finished':
             self.events.put(('progress', 100))
 
+    def postprocessor_hook(self, d):
+        if d['status'] == 'started' and d['postprocessor'] == 'Merger':
+            self.events.put(('status', 'Merging video and audio...'))
+
     def process_events(self):
         # tkinter works only from main thread
         while not self.events.empty():
@@ -148,6 +156,8 @@ class App:
             elif kind == 'progress':
                 self.progress['value'] = value
                 self.status_var.set(f'Downloading... {value:.1f}%')
+            elif kind == 'status':
+                self.status_var.set(value)
             elif kind == 'done':
                 self.status_var.set('Finished.')
                 files = '\n'.join(Path(f).name for f in value)
@@ -173,7 +183,7 @@ class App:
 
 if __name__ == '__main__':
     # className has to match StartupWMClass in install_lin.sh
-    root = tk.Tk(className='yt-downloader')
+    root = tk.Tk(className='n-tube')
     set_icon(root)
     App(root)
     root.mainloop()
