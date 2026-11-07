@@ -86,8 +86,8 @@ If the menu still shows the old name after install, log out and log in again (on
 ATT:
 - app has to be built on the system it is made for, it is not possible to build Linux or macOS version on Windows
 - close the app before running build again, otherwise build will fail
-- macOS build is not tested yet
-- on macOS app is not signed, so first time it has to be opened by right click -> Open
+- on macOS app is not signed - built locally it starts normally, but when copied from another computer (e.g. downloaded)
+  macOS may block it, then first time it has to be opened by right click -> Open
 - on Windows Explorer can show old icon of the exe because of its icon cache, renaming or moving the file helps
 - the app needs internet access to PyPI (pypi.org) for yt-dlp self-update, without it the app works with the version it has
 
