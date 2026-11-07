@@ -27,7 +27,7 @@ fi
 
 echo "Installing dependencies..."
 .venv/bin/python -m pip install --upgrade pip
-.venv/bin/python -m pip install -r requirements.txt pyinstaller
+.venv/bin/python -m pip install -U -r requirements.txt pyinstaller
 
 echo
 echo "Setup finished. Run ./build_lin.sh to build the app."

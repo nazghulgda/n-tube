@@ -18,6 +18,15 @@ done
 cp assets/png/n-tube-512.png "$ICONSET/icon_512x512.png"
 iconutil -c icns "$ICONSET" -o build/n-tube.icns
 
+# newest yt-dlp inside the app
+.venv/bin/python -m pip install -U yt-dlp
+
+# only icons used by n-tube-gui.py (set_icon)
+ICONS=()
+for size in 16 32 48 64 128 256; do
+    ICONS+=(--add-data "assets/png/n-tube-$size.png:assets/png")
+done
+
 # no --onefile, it's deprecated for .app on macOS
 .venv/bin/pyinstaller \
     --windowed \
@@ -25,7 +34,7 @@ iconutil -c icns "$ICONSET" -o build/n-tube.icns
     --noconfirm \
     --name n-tube \
     --icon build/n-tube.icns \
-    --add-data "assets:assets" \
+    "${ICONS[@]}" \
     --collect-binaries imageio_ffmpeg \
     n-tube-gui.py
 

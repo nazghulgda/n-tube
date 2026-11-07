@@ -1,8 +1,10 @@
 from pathlib import Path
+from urllib.parse import urlparse
 
 import deno
 import yt_dlp
 import imageio_ffmpeg
+from yt_dlp.utils import DownloadError
 
 folder = Path.home() / 'Downloads'
 
@@ -17,6 +19,10 @@ ydl_opts = {
     # 'cookiesfrombrowser': ('firefox',),
 }
 # without 'nocheckcertificate': True script will return an error
+
+def is_valid_url(url):
+    parts = urlparse(url)
+    return parts.scheme in ('http', 'https') and '.' in parts.netloc
 
 def dwl_vid(video_url):
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -33,6 +39,12 @@ channel = True
 while channel:
     link_of_the_video = input("Copy & paste the URL of the video you want to download: ")
     zxt = link_of_the_video.strip()
+    if not is_valid_url(zxt):
+        print("This is not a valid link, it has to start with http:// or https://")
+        continue
 
-    dwl_vid(zxt)
+    try:
+        dwl_vid(zxt)
+    except DownloadError:
+        print("Wrong link or the video is not available.")
     channel = ask_next()

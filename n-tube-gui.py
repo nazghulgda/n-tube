@@ -1,12 +1,24 @@
+import glob
+import hashlib
+import importlib.abc
+import importlib.machinery
+import io
+import json
 import os
 import queue
+import re
+import shutil
+import ssl
 import sys
 import threading
+import urllib.request
+import zipfile
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
+from urllib.parse import urlparse
 
-import yt_dlp
+import certifi
 import imageio_ffmpeg
 
 # no console in windowed exe - stdout/stderr are None
@@ -14,6 +26,110 @@ if sys.stdout is None:
     sys.stdout = open(os.devnull, 'w')
 if sys.stderr is None:
     sys.stderr = open(os.devnull, 'w')
+
+
+def data_dir():
+    if sys.platform == 'win32':
+        base = Path(os.environ.get('LOCALAPPDATA', Path.home() / 'AppData' / 'Local'))
+    elif sys.platform == 'darwin':
+        base = Path.home() / 'Library' / 'Application Support'
+    else:
+        base = Path(os.environ.get('XDG_DATA_HOME', Path.home() / '.local' / 'share'))
+    return base / 'n-tube'
+
+
+# yt-dlp self-update, only in built app - newer yt-dlp from PyPI is extracted here
+# and used instead of the bundled one from the next start
+UPDATE_DIR = data_dir() / 'yt-dlp'
+
+
+def version_key(version):
+    return tuple(int(x) for x in version.split('.'))
+
+
+def installed_updates():
+    if not UPDATE_DIR.is_dir():
+        return []
+    folders = [f for f in UPDATE_DIR.iterdir() if f.is_dir() and re.fullmatch(r'\d+(\.\d+)*', f.name)]
+    return sorted(folders, key=lambda f: version_key(f.name))
+
+
+class UpdatedYtDlpFinder(importlib.abc.MetaPathFinder):
+    # has to be before PyInstaller importer, otherwise bundled yt_dlp is imported
+    def __init__(self, folder):
+        self.folder = str(folder)
+
+    def find_spec(self, name, path=None, target=None):
+        if name == 'yt_dlp':
+            return importlib.machinery.PathFinder.find_spec(name, [self.folder])
+        if name.startswith('yt_dlp.'):
+            return importlib.machinery.PathFinder.find_spec(name, path)
+        return None
+
+
+def unload_yt_dlp():
+    for name in list(sys.modules):
+        if name == 'yt_dlp' or name.startswith('yt_dlp.'):
+            del sys.modules[name]
+
+
+def load_yt_dlp():
+    import yt_dlp
+    if not getattr(sys, 'frozen', False):
+        return yt_dlp
+    bundled = version_key(yt_dlp.version.__version__)
+    updates = installed_updates()
+    for folder in updates:
+        if version_key(folder.name) <= bundled:
+            shutil.rmtree(folder, ignore_errors=True)
+    updates = [f for f in updates if version_key(f.name) > bundled]
+    if not updates:
+        return yt_dlp
+    newest = updates[-1]
+    finder = UpdatedYtDlpFinder(newest)
+    unload_yt_dlp()
+    sys.meta_path.insert(0, finder)
+    try:
+        import yt_dlp
+    except Exception:
+        # update doesn't work with this build, back to the bundled version
+        sys.meta_path.remove(finder)
+        unload_yt_dlp()
+        shutil.rmtree(newest, ignore_errors=True)
+        import yt_dlp
+        return yt_dlp
+    for folder in updates[:-1]:
+        shutil.rmtree(folder, ignore_errors=True)
+    return yt_dlp
+
+
+def update_yt_dlp(current, events):
+    try:
+        # certifi - system certificates are not always found by the built app
+        context = ssl.create_default_context(cafile=certifi.where())
+        with urllib.request.urlopen('https://pypi.org/pypi/yt-dlp/json', timeout=15, context=context) as r:
+            info = json.load(r)
+        latest = info['info']['version']
+        if version_key(latest) <= version_key(current) or (UPDATE_DIR / latest).is_dir():
+            return
+        wheel = next(u for u in info['urls'] if u['packagetype'] == 'bdist_wheel')
+        with urllib.request.urlopen(wheel['url'], timeout=60, context=context) as r:
+            data = r.read()
+        if hashlib.sha256(data).hexdigest() != wheel['digests']['sha256']:
+            raise ValueError('wrong checksum of the downloaded file')
+        tmp = UPDATE_DIR / f'.tmp-{latest}'
+        shutil.rmtree(tmp, ignore_errors=True)
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            z.extractall(tmp)
+        tmp.rename(UPDATE_DIR / latest)
+        events.put(('log', f'yt-dlp {latest} downloaded, it will be used after restart of the app.'))
+    except Exception as e:
+        events.put(('log', f'yt-dlp update failed: {e}'))
+
+
+yt_dlp = load_yt_dlp()
+DownloadCancelled = yt_dlp.utils.DownloadCancelled
+DownloadError = yt_dlp.utils.DownloadError
 
 # exe unpacks files to sys._MEIPASS
 ASSETS = Path(getattr(sys, '_MEIPASS', Path(__file__).parent)) / 'assets'
@@ -32,6 +148,11 @@ def set_icon(root):
         root.icons = [tk.PhotoImage(file=str(ASSETS / 'png' / f'n-tube-{size}.png'))
                       for size in (256, 128, 64, 48, 32, 16)]
         root.iconphoto(True, *root.icons)
+
+
+def is_valid_url(url):
+    parts = urlparse(url)
+    return parts.scheme in ('http', 'https') and '.' in parts.netloc
 
 
 class GuiLogger:
@@ -56,6 +177,10 @@ class App:
     def __init__(self, root):
         self.root = root
         self.events = queue.Queue()
+        self.thread = None
+        self.cancel = False
+        # files being downloaded, to remove .part files when window is closed
+        self.downloading_files = set()
 
         root.title('n-tube - video downloader')
         root.minsize(560, 360)
@@ -75,8 +200,10 @@ class App:
 
         ttk.Label(frame, text='Save to:').grid(row=1, column=0, sticky='w', pady=(8, 0))
         self.folder_var = tk.StringVar(value=str(Path.home() / 'Downloads'))
-        ttk.Entry(frame, textvariable=self.folder_var).grid(row=1, column=1, sticky='ew', padx=5, pady=(8, 0))
-        ttk.Button(frame, text='Browse...', command=self.choose_folder).grid(row=1, column=2, pady=(8, 0))
+        self.folder_entry = ttk.Entry(frame, textvariable=self.folder_var)
+        self.folder_entry.grid(row=1, column=1, sticky='ew', padx=5, pady=(8, 0))
+        self.browse_btn = ttk.Button(frame, text='Browse...', command=self.choose_folder)
+        self.browse_btn.grid(row=1, column=2, pady=(8, 0))
 
         self.progress = ttk.Progressbar(frame, maximum=100)
         self.progress.grid(row=2, column=0, columnspan=3, sticky='ew', pady=(12, 0))
@@ -87,6 +214,10 @@ class App:
         self.log.grid(row=4, column=0, columnspan=3, sticky='nsew')
 
         self.url_entry.focus()
+        root.protocol('WM_DELETE_WINDOW', self.on_close)
+        self.events.put(('log', f'yt-dlp {yt_dlp.version.__version__}'))
+        if getattr(sys, 'frozen', False):
+            threading.Thread(target=update_yt_dlp, args=(yt_dlp.version.__version__, self.events), daemon=True).start()
         self.root.after(100, self.process_events)
 
     def choose_folder(self):
@@ -102,10 +233,18 @@ class App:
         if not url:
             messagebox.showwarning('No URL', 'Paste the URL of the video you want to download.')
             return
+        if not is_valid_url(url):
+            messagebox.showwarning('Wrong URL', 'This is not a valid link, it has to start with http:// or https://')
+            return
         self.download_btn.config(state='disabled')
+        self.folder_entry.config(state='disabled')
+        self.browse_btn.config(state='disabled')
+        self.cancel = False
+        self.downloading_files = set()
         self.progress['value'] = 0
         self.status_var.set('Starting...')
-        threading.Thread(target=self.dwl_vid, args=(url, self.folder_var.get()), daemon=True).start()
+        self.thread = threading.Thread(target=self.dwl_vid, args=(url, self.folder_var.get()), daemon=True)
+        self.thread.start()
 
     def dwl_vid(self, video_url, folder):
         saved_files = []
@@ -129,11 +268,16 @@ class App:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([video_url])
             self.events.put(('done', saved_files))
+        except DownloadError as e:
+            self.events.put(('error', f'Wrong link or the video is not available.\n\n{e}'))
         except Exception as e:
             self.events.put(('error', str(e)))
 
     def progress_hook(self, d):
+        if self.cancel:
+            raise DownloadCancelled()
         if d['status'] == 'downloading':
+            self.downloading_files.add(d['filename'])
             total = d.get('total_bytes') or d.get('total_bytes_estimate')
             percent = d['downloaded_bytes'] / total * 100 if total else 0
             self.events.put(('progress', percent))
@@ -144,9 +288,31 @@ class App:
         if d['status'] == 'started' and d['postprocessor'] == 'Merger':
             self.events.put(('status', 'Merging video and audio...'))
 
+    def on_close(self):
+        if not (self.thread and self.thread.is_alive()):
+            self.root.destroy()
+            return
+        # download is stopped in progress_hook, .part files can be removed after that (Windows can't remove open file)
+        self.cancel = True
+        self.status_var.set('Cancelling...')
+        self.wait_and_close(50)
+
+    def wait_and_close(self, tries):
+        # merging (ffmpeg) can't be stopped, max 5 s of waiting
+        if self.thread.is_alive() and tries > 0:
+            self.root.after(100, self.wait_and_close, tries - 1)
+            return
+        for f in self.downloading_files:
+            for part in glob.glob(glob.escape(f) + '.part*') + glob.glob(glob.escape(f) + '.ytdl'):
+                try:
+                    os.remove(part)
+                except OSError:
+                    pass
+        self.root.destroy()
+
     def process_events(self):
         # tkinter works only from main thread
-        while not self.events.empty():
+        while not self.events.empty() and not self.cancel:
             kind, value = self.events.get()
             if kind == 'log':
                 self.log.config(state='normal')
@@ -178,6 +344,8 @@ class App:
         self.progress['value'] = 0
         self.status_var.set('Paste a link and click Download.')
         self.download_btn.config(state='normal')
+        self.folder_entry.config(state='normal')
+        self.browse_btn.config(state='normal')
         self.url_entry.focus()
 
 

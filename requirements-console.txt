@@ -1,2 +1,2 @@
 -r requirements.txt
-deno==2.9.5
+deno

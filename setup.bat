@@ -14,7 +14,7 @@ if not exist ".venv\Scripts\python.exe" (
 
 echo Installing dependencies...
 ".venv\Scripts\python.exe" -m pip install --upgrade pip
-".venv\Scripts\python.exe" -m pip install -r requirements.txt pyinstaller
+".venv\Scripts\python.exe" -m pip install -U -r requirements.txt pyinstaller
 if errorlevel 1 (
     echo ERROR: Installing dependencies failed.
     pause

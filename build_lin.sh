@@ -7,6 +7,15 @@ if [ ! -x ".venv/bin/pyinstaller" ]; then
     exit 1
 fi
 
+# newest yt-dlp inside the app
+.venv/bin/python -m pip install -U yt-dlp
+
+# only icons used by n-tube-gui.py (set_icon)
+ICONS=()
+for size in 16 32 48 64 128 256; do
+    ICONS+=(--add-data "assets/png/n-tube-$size.png:assets/png")
+done
+
 # --collect-binaries imageio_ffmpeg - ffmpeg inside the executable
 .venv/bin/pyinstaller \
     --onefile \
@@ -14,7 +23,7 @@ fi
     --clean \
     --noconfirm \
     --name n-tube \
-    --add-data "assets:assets" \
+    "${ICONS[@]}" \
     --collect-binaries imageio_ffmpeg \
     n-tube-gui.py
 
