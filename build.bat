@@ -15,6 +15,8 @@ rem --collect-binaries imageio_ffmpeg - ffmpeg inside the exe
     --clean ^
     --noconfirm ^
     --name yt-downloader ^
+    --icon assets\n-tube.ico ^
+    --add-data "assets;assets" ^
     --collect-binaries imageio_ffmpeg ^
     pull-yt-video-gui.py
 if errorlevel 1 (

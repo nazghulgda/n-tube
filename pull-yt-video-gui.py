@@ -15,6 +15,24 @@ if sys.stdout is None:
 if sys.stderr is None:
     sys.stderr = open(os.devnull, 'w')
 
+# exe unpacks files to sys._MEIPASS
+ASSETS = Path(getattr(sys, '_MEIPASS', Path(__file__).parent)) / 'assets'
+
+
+def set_icon(root):
+    if sys.platform == 'win32':
+        # without it taskbar shows python icon
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID('yt-downloader')
+        except Exception:
+            pass
+        root.iconbitmap(default=str(ASSETS / 'n-tube.ico'))
+    else:
+        root.icons = [tk.PhotoImage(file=str(ASSETS / 'png' / f'n-tube-{size}.png'))
+                      for size in (256, 128, 64, 48, 32, 16)]
+        root.iconphoto(True, *root.icons)
+
 
 class GuiLogger:
     def __init__(self, events):
@@ -39,7 +57,7 @@ class App:
         self.root = root
         self.events = queue.Queue()
 
-        root.title('YouTube Downloader')
+        root.title('n-tube - video downloader')
         root.minsize(560, 360)
 
         frame = ttk.Frame(root, padding=10)
@@ -92,6 +110,8 @@ class App:
             'nocheckcertificate': True,
             'ffmpeg_location': imageio_ffmpeg.get_ffmpeg_exe(),
             'paths': {'home': folder},
+            # too long file name = error
+            'outtmpl': '%(title).150B [%(id)s].%(ext)s',
             'quiet': True,
             'noprogress': True,
             'logger': GuiLogger(self.events),
@@ -152,6 +172,8 @@ class App:
 
 
 if __name__ == '__main__':
-    root = tk.Tk()
+    # className has to match StartupWMClass in install_lin.sh
+    root = tk.Tk(className='yt-downloader')
+    set_icon(root)
     App(root)
     root.mainloop()
