@@ -5,3 +5,5 @@ imageio-ffmpeg==0.6.0
 requests==2.34.2
 urllib3==2.8.0
 yt-dlp
+# challenge solver scripts for deno (JavaScript runtime), version has to match yt-dlp
+yt-dlp-ejs

@@ -9,16 +9,21 @@ from yt_dlp.utils import DownloadError
 folder = Path.home() / 'Downloads'
 
 ydl_opts = {
-    'nocheckcertificate': True,
     'ffmpeg_location': imageio_ffmpeg.get_ffmpeg_exe(),
+    # always .mp4 in the highest resolution, H.264/AAC preferred at the same resolution
+    # (plays everywhere), above 1080p YouTube has only VP9/AV1 - remuxed to .mp4, not re-encoded
+    'format_sort': ['res', 'vcodec:h264', 'acodec:aac'],
+    'merge_output_format': 'mp4',
+    'postprocessors': [{'key': 'FFmpegVideoRemuxer', 'preferedformat': 'mp4'}],
     # without JavaScript runtime some YouTube formats are missing
     'js_runtimes': {'deno': {'path': deno.find_deno_bin()}},
+    # solver scripts from GitHub when yt-dlp-ejs doesn't match yt-dlp version
+    'remote_components': ['ejs:github'],
     'paths': {'home': str(folder)},
     # too long file name = error
     'outtmpl': '%(title).150B [%(id)s].%(ext)s',
     # 'cookiesfrombrowser': ('firefox',),
 }
-# without 'nocheckcertificate': True script will return an error
 
 def is_valid_url(url):
     parts = urlparse(url)

@@ -10,7 +10,8 @@ DESKTOP="$HOME/.local/share/applications/n-tube.desktop"
 if [ "$1" = "--uninstall" ]; then
     rm -f "$BIN" "$ICON" "$DESKTOP"
     # yt-dlp updates downloaded by the app
-    rm -rf "$HOME/.local/share/n-tube"
+    # same folder as data_dir() in n-tube-gui.py
+    rm -rf "${XDG_DATA_HOME:-$HOME/.local/share}/n-tube"
     echo "Removed."
     exit 0
 fi

@@ -11,8 +11,8 @@ if errorlevel 1 (
     exit /b 1
 )
 
-rem newest yt-dlp inside the exe
-".venv\Scripts\python.exe" -m pip install -U yt-dlp
+rem newest yt-dlp (and solver scripts matching it) inside the exe
+".venv\Scripts\python.exe" -m pip install -U yt-dlp yt-dlp-ejs
 if errorlevel 1 (
     echo ERROR: Updating yt-dlp failed.
     pause

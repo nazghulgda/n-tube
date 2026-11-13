@@ -8,17 +8,26 @@ There are two versions:
 
 Python 3 is needed to run scripts (GUI version needs also `tkinter`, on Linux it's a separate package, e.g. `python3-tk`).  
 `ffmpeg` is installed together with requirements (`imageio-ffmpeg` package), there is no need to install it globally.  
-Too long video titles are trimmed in file name (150 bytes), otherwise saving the file fails.
+Too long video titles are trimmed in file name (150 bytes), otherwise saving the file fails.  
+Videos are always saved as `.mp4` in the highest resolution the site has. At the same resolution H.264 video with AAC
+audio is preferred, because it plays everywhere. Above 1080p YouTube has only VP9 or AV1, such files are put
+into `.mp4` without re-encoding. They play in VLC, browsers and Android, Windows may need free "AV1 Video Extension"
+from Microsoft Store for AV1, older TVs and iPhones may not play them.  
+A link to a playlist downloads all videos from it, each one to a separate file. Watch out for YouTube links copied
+while a playlist is playing: if the link contains `&list=`, the whole playlist is downloaded, not only the one video.
 
 ### Requirements files
 - `requirements.txt` - packages for GUI version, used also by setup scripts for building the app
-- `requirements-console.txt` - everything from `requirements.txt` plus JavaScript runtime `deno` (about 100 MB),
-  without it some YouTube formats are missing (usually the best quality ones)
+- `requirements-console.txt` - everything from `requirements.txt` plus JavaScript runtime `deno` (about 100 MB)
 
-The app built by setup and build scripts doesn't contain `deno`.
+YouTube needs a JavaScript runtime (`deno`) to solve its challenges, without it some formats are missing (usually
+the best quality ones). `yt-dlp-ejs` contains the scripts deno runs, its version has to match yt-dlp. If it doesn't,
+yt-dlp downloads matching scripts from GitHub.  
+The GUI version doesn't need `deno` in requirements, it downloads deno by itself (see below), so the built app
+stays small (about 51 MB on Windows instead of about 91 MB).
 
-`yt-dlp` and `deno` have no version in requirements, so the newest version is always installed - YouTube and other sites
-change things often and only the newest yt-dlp works with them. Other packages have fixed versions.
+`yt-dlp`, `yt-dlp-ejs` and `deno` have no version in requirements, so the newest version is always installed - YouTube
+and other sites change things often and only the newest yt-dlp works with them. Other packages have fixed versions.
 
 ### Console version
 Install requirements: `pip install -U -r requirements-console.txt`  
@@ -51,9 +60,24 @@ Updates are saved in:
 
 Only the newest one is kept. If downloaded yt-dlp can't be loaded, the app removes it and uses the bundled one.
 If the app is built again with newer yt-dlp, older updates are removed. Deleting the folder is safe, it's downloaded again.  
+The update contains also `yt-dlp-ejs` in the version the new yt-dlp needs.  
 ATT: the app contains only Python modules used by yt-dlp at build time. If newer yt-dlp needs something more,
 build the app again.  
 Script version (`python n-tube-gui.py`) doesn't update itself, it uses yt-dlp installed by pip.
+
+### deno download (GUI version)
+At the first start the app downloads deno from PyPI (about 40 MB, checksum is verified) in the background and uses it
+right away, no restart is needed. Later starts check if there is newer deno and download it the same way.
+deno releases come out often, so expect the 40 MB download every few weeks.
+The used deno version is shown in the log after the yt-dlp version.
+
+deno is saved in `deno` folder next to yt-dlp updates (e.g. `%LOCALAPPDATA%\n-tube\deno` on Windows),
+only the newest one is kept. Deleting the folder is safe, it's downloaded again.  
+If deno is installed by pip (`requirements-console.txt`), script version of the GUI uses that one and doesn't
+download anything.  
+deno keeps its own cache in `%LOCALAPPDATA%\deno` (Windows), `~/.cache/deno` (Linux) or `~/Library/Caches/deno`
+(macOS). It's shared with other programs using deno, so `install_lin.sh --uninstall` doesn't remove it.  
+Downloaded deno works on Windows x64, Linux x64 and ARM64, macOS Intel and Apple Silicon.
 
 ### Cookies
 Some videos (age restricted, private, needing login) can be downloaded only with cookies from the browser.
@@ -89,6 +113,7 @@ ATT:
 - on macOS app is not signed - built locally it starts normally, but when copied from another computer (e.g. downloaded)
   macOS may block it, then first time it has to be opened by right click -> Open
 - on Windows Explorer can show old icon of the exe because of its icon cache, renaming or moving the file helps
-- the app needs internet access to PyPI (pypi.org) for yt-dlp self-update, without it the app works with the version it has
+- the app needs internet access to PyPI (pypi.org) for yt-dlp self-update and deno download, without it the app works
+  with the yt-dlp version it has and without deno
 
 That's all for now ;)

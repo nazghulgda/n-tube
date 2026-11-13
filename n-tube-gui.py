@@ -5,6 +5,7 @@ import importlib.machinery
 import io
 import json
 import os
+import platform
 import queue
 import re
 import shutil
@@ -47,11 +48,19 @@ def version_key(version):
     return tuple(int(x) for x in version.split('.'))
 
 
-def installed_updates():
-    if not UPDATE_DIR.is_dir():
+def version_folders(parent):
+    if not parent.is_dir():
         return []
-    folders = [f for f in UPDATE_DIR.iterdir() if f.is_dir() and re.fullmatch(r'\d+(\.\d+)*', f.name)]
+    folders = [f for f in parent.iterdir() if f.is_dir() and re.fullmatch(r'\d+(\.\d+)*', f.name)]
     return sorted(folders, key=lambda f: version_key(f.name))
+
+
+def installed_updates():
+    return version_folders(UPDATE_DIR)
+
+
+# yt_dlp_ejs - challenge solver scripts run by deno, its version has to match yt-dlp
+UPDATED_PACKAGES = ('yt_dlp', 'yt_dlp_ejs')
 
 
 class UpdatedYtDlpFinder(importlib.abc.MetaPathFinder):
@@ -60,16 +69,20 @@ class UpdatedYtDlpFinder(importlib.abc.MetaPathFinder):
         self.folder = str(folder)
 
     def find_spec(self, name, path=None, target=None):
-        if name == 'yt_dlp':
+        # None = not in the update folder, bundled package is used
+        if name in UPDATED_PACKAGES:
             return importlib.machinery.PathFinder.find_spec(name, [self.folder])
-        if name.startswith('yt_dlp.'):
+        # submodules only of packages loaded from the update folder
+        if path and all(str(p).startswith(self.folder) for p in path):
             return importlib.machinery.PathFinder.find_spec(name, path)
         return None
 
 
 def unload_yt_dlp():
+    # yt-dlp patches requests, urllib3 and websockets at import, without unloading them
+    # the second yt-dlp patches already patched objects and requests fail
     for name in list(sys.modules):
-        if name == 'yt_dlp' or name.startswith('yt_dlp.'):
+        if name.partition('.')[0] in (*UPDATED_PACKAGES, 'requests', 'urllib3', 'websockets'):
             del sys.modules[name]
 
 
@@ -103,28 +116,122 @@ def load_yt_dlp():
     return yt_dlp
 
 
+def ssl_context():
+    # certifi - system certificates are not always found by the built app
+    return ssl.create_default_context(cafile=certifi.where())
+
+
+def pypi_info(package, context, version=None):
+    url = f'https://pypi.org/pypi/{package}/{version}/json' if version else f'https://pypi.org/pypi/{package}/json'
+    with urllib.request.urlopen(url, timeout=15, context=context) as r:
+        return json.load(r)
+
+
+def download_wheel(info, context, platform_parts=()):
+    # platform_parts - parts of the file name, e.g. ('manylinux', 'x86_64')
+    wheel = next((u for u in info['urls'] if u['packagetype'] == 'bdist_wheel'
+                  and all(p in u['filename'] for p in platform_parts)), None)
+    if wheel is None:
+        raise ValueError(f'no {info["info"]["name"]} package for this system')
+    with urllib.request.urlopen(wheel['url'], timeout=120, context=context) as r:
+        data = r.read()
+    if hashlib.sha256(data).hexdigest() != wheel['digests']['sha256']:
+        raise ValueError('wrong checksum of the downloaded file')
+    return zipfile.ZipFile(io.BytesIO(data))
+
+
+def required_version(info, package):
+    # e.g. 'yt-dlp-ejs==0.8.0; extra == "default"'
+    for req in info['info'].get('requires_dist') or []:
+        m = re.match(rf'{re.escape(package)}==([\d.]+);.*extra == "default"', req)
+        if m:
+            return m.group(1)
+    return None
+
+
 def update_yt_dlp(current, events):
     try:
-        # certifi - system certificates are not always found by the built app
-        context = ssl.create_default_context(cafile=certifi.where())
-        with urllib.request.urlopen('https://pypi.org/pypi/yt-dlp/json', timeout=15, context=context) as r:
-            info = json.load(r)
+        context = ssl_context()
+        info = pypi_info('yt-dlp', context)
         latest = info['info']['version']
         if version_key(latest) <= version_key(current) or (UPDATE_DIR / latest).is_dir():
             return
-        wheel = next(u for u in info['urls'] if u['packagetype'] == 'bdist_wheel')
-        with urllib.request.urlopen(wheel['url'], timeout=60, context=context) as r:
-            data = r.read()
-        if hashlib.sha256(data).hexdigest() != wheel['digests']['sha256']:
-            raise ValueError('wrong checksum of the downloaded file')
         tmp = UPDATE_DIR / f'.tmp-{latest}'
         shutil.rmtree(tmp, ignore_errors=True)
-        with zipfile.ZipFile(io.BytesIO(data)) as z:
+        with download_wheel(info, context) as z:
             z.extractall(tmp)
+        ejs = required_version(info, 'yt-dlp-ejs')
+        if ejs:
+            with download_wheel(pypi_info('yt-dlp-ejs', context, ejs), context) as z:
+                z.extractall(tmp)
         tmp.rename(UPDATE_DIR / latest)
         events.put(('log', f'yt-dlp {latest} downloaded, it will be used after restart of the app.'))
     except Exception as e:
         events.put(('log', f'yt-dlp update failed: {e}'))
+
+
+# JavaScript runtime for YouTube challenges, without it some formats are missing.
+# Too big to be bundled (~40 MB compressed), so it's downloaded from PyPI (deno package)
+# at the first start and updated like yt-dlp. Used right after download, no restart needed.
+DENO_DIR = data_dir() / 'deno'
+DENO_EXE = 'deno.exe' if sys.platform == 'win32' else 'deno'
+
+
+def deno_wheel_parts():
+    machine = platform.machine().lower()
+    if sys.platform == 'win32':
+        return ('win_amd64',) if machine in ('amd64', 'x86_64') else None
+    if sys.platform == 'darwin':
+        return ('macosx', 'arm64' if machine == 'arm64' else 'x86_64')
+    if sys.platform.startswith('linux') and machine in ('x86_64', 'aarch64'):
+        return ('manylinux', machine)
+    return None
+
+
+def installed_deno():
+    """Returns (path, version), version None = deno from pip, not updated by the app."""
+    if not getattr(sys, 'frozen', False):
+        # script version with requirements-console.txt
+        try:
+            import deno
+            return deno.find_deno_bin(), None
+        except Exception:
+            pass
+    for tmp in DENO_DIR.glob('.tmp-*'):
+        shutil.rmtree(tmp, ignore_errors=True)
+    folders = [f for f in version_folders(DENO_DIR) if (f / DENO_EXE).is_file()]
+    if not folders:
+        return None, None
+    for folder in folders[:-1]:
+        shutil.rmtree(folder, ignore_errors=True)
+    return str(folders[-1] / DENO_EXE), folders[-1].name
+
+
+def update_deno(current, events):
+    try:
+        parts = deno_wheel_parts()
+        if parts is None:
+            events.put(('log', 'deno is not available for this system, some YouTube formats may be missing.'))
+            return
+        context = ssl_context()
+        info = pypi_info('deno', context)
+        latest = info['info']['version']
+        if current and version_key(latest) <= version_key(current):
+            return
+        if not current:
+            events.put(('log', 'Downloading deno (JavaScript runtime needed by YouTube, about 40 MB)...'))
+        tmp = DENO_DIR / f'.tmp-{latest}'
+        shutil.rmtree(tmp, ignore_errors=True)
+        tmp.mkdir(parents=True)
+        with download_wheel(info, context, parts) as z:
+            member = next(n for n in z.namelist() if n.endswith('/scripts/' + DENO_EXE))
+            (tmp / DENO_EXE).write_bytes(z.read(member))
+        (tmp / DENO_EXE).chmod(0o755)
+        tmp.rename(DENO_DIR / latest)
+        events.put(('deno', str(DENO_DIR / latest / DENO_EXE)))
+        events.put(('log', f'deno {latest} downloaded.'))
+    except Exception as e:
+        events.put(('log', f'deno download failed: {e}'))
 
 
 yt_dlp = load_yt_dlp()
@@ -218,6 +325,11 @@ class App:
         self.events.put(('log', f'yt-dlp {yt_dlp.version.__version__}'))
         if getattr(sys, 'frozen', False):
             threading.Thread(target=update_yt_dlp, args=(yt_dlp.version.__version__, self.events), daemon=True).start()
+        self.deno, deno_version = installed_deno()
+        if self.deno:
+            self.events.put(('log', f'deno {deno_version or "from pip"}'))
+        if not (self.deno and deno_version is None):
+            threading.Thread(target=update_deno, args=(deno_version, self.events), daemon=True).start()
         self.root.after(100, self.process_events)
 
     def choose_folder(self):
@@ -243,14 +355,18 @@ class App:
         self.downloading_files = set()
         self.progress['value'] = 0
         self.status_var.set('Starting...')
-        self.thread = threading.Thread(target=self.dwl_vid, args=(url, self.folder_var.get()), daemon=True)
+        self.thread = threading.Thread(target=self.dwl_vid, args=(url, self.folder_var.get(), self.deno), daemon=True)
         self.thread.start()
 
-    def dwl_vid(self, video_url, folder):
+    def dwl_vid(self, video_url, folder, deno):
         saved_files = []
         ydl_opts = {
-            'nocheckcertificate': True,
             'ffmpeg_location': imageio_ffmpeg.get_ffmpeg_exe(),
+            # always .mp4 in the highest resolution, H.264/AAC preferred at the same resolution
+            # (plays everywhere), above 1080p YouTube has only VP9/AV1 - remuxed to .mp4, not re-encoded
+            'format_sort': ['res', 'vcodec:h264', 'acodec:aac'],
+            'merge_output_format': 'mp4',
+            'postprocessors': [{'key': 'FFmpegVideoRemuxer', 'preferedformat': 'mp4'}],
             'paths': {'home': folder},
             # too long file name = error
             'outtmpl': '%(title).150B [%(id)s].%(ext)s',
@@ -261,9 +377,12 @@ class App:
             'postprocessor_hooks': [self.postprocessor_hook],
             # final file path, after merging
             'post_hooks': [saved_files.append],
+            # solver scripts from GitHub when yt-dlp-ejs doesn't match yt-dlp version
+            'remote_components': ['ejs:github'],
             # 'cookiesfrombrowser': ('firefox',),
         }
-        # without 'nocheckcertificate': True script will return an error
+        if deno:
+            ydl_opts['js_runtimes'] = {'deno': {'path': deno}}
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([video_url])
@@ -324,6 +443,8 @@ class App:
                 self.status_var.set(f'Downloading... {value:.1f}%')
             elif kind == 'status':
                 self.status_var.set(value)
+            elif kind == 'deno':
+                self.deno = value
             elif kind == 'done':
                 self.status_var.set('Finished.')
                 files = '\n'.join(Path(f).name for f in value)
