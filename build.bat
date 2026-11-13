@@ -2,7 +2,10 @@
 setlocal
 cd /d "%~dp0"
 
-if not exist ".venv\Scripts\pyinstaller.exe" (
+rem python -m PyInstaller instead of pyinstaller.exe - the .exe launcher
+rem has the venv path hardcoded and breaks when the folder is moved/renamed
+".venv\Scripts\python.exe" -m PyInstaller --version >nul 2>&1
+if errorlevel 1 (
     echo ERROR: PyInstaller not found. Run setup.bat first.
     pause
     exit /b 1
@@ -17,7 +20,7 @@ if errorlevel 1 (
 )
 
 rem --collect-binaries imageio_ffmpeg - ffmpeg inside the exe
-".venv\Scripts\pyinstaller.exe" ^
+".venv\Scripts\python.exe" -m PyInstaller ^
     --onefile ^
     --windowed ^
     --clean ^
